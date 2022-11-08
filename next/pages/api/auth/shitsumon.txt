@@ -1,0 +1,123 @@
+### 実現したいこと
+Django REST Framework + Next.js + NextAuth.js(v4)でGoogle認証を行う
+
+### 背景
+上記のチュートリアルではNestAuth.jsのVersion 3が使用されているため、NextAuth公式サイトを参考にv4に書き換えながらチュートリアルを進めています。
+
+### 発生している問題
+Googleログイン画面への移行には成功し、アカウントを選択したところで"Access Denied, You do not have permission to sign in" と表示されます。
+
+### ソースコード
+[...nextauth.js]
+```
+import NextAuth from "next-auth"
+import axios from "axios"
+import GoogleProvider from "next-auth/providers/google"
+
+export default NextAuth({
+  providers: [
+    GoogleProvider({
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    }),
+  ],
+<!-- ここ以降はチュートリアルとコードは同じ -->
+callbacks: {
+    async signIn(user, account, profile) {
+      if (account.provider === 'google') {
+        const { accessToken, idToken } = account
+
+        try {
+          const response = await axios.post(
+            `${process.env.DJANGO_URL}/api/social/login/google/`,
+            {
+              access_token: accessToken,
+              id_token: idToken,
+            }
+          )
+
+          const { access_token } = response.data
+          user.accessToken = access_token
+
+          return true
+        } catch (error) {
+          return false
+        }
+      }
+      return false
+    },
+    async jwt(token, user, account, profile, isNewUser) {
+      if (user) {
+        const { accessToken } = user
+
+        token.accessToken = accessToken
+      }
+
+      return token
+    },
+    async session(session, user) {
+      session.accessToken = user.accessToken
+      return session
+    },
+  }
+}
+
+export default (req, res) => NextAuth(req, res, settings)
+```
+
+### 自分で試したこと
+#### 1. DjangoかNextどちらに問題があるか確認
+はる先生のgithubからフロントエンドのプログラムをダウンロードし、私がチュートリアルを参考に(完全なコピーで変更箇所はない)したDjangoと動かしてみました。→Googleログインに成功したため、Djangoのエラーはなし、next.jsの方に問題があることがわかりました。
+
+#### 2. Nextのエラーの詳細を確認
+[.../nextauth].jsのcallbacks-のasync signIn...の中のtry-catch文に、エラーがある場合エラーを出力するように追記し、再度自分で作成したプログラムを動かし同じエラーを再現したところ、
+next側のターミナルで
+```
+AxiosError: Request failed with status code 400
+    at settle (file:///Users/myuser/Documents/projects/djangonext-googleauth/next/node_modules/axios/lib/core/settle.js:19:12)
+    at IncomingMessage.handleStreamEnd (file:///Users/myuser/Documents/projects/djangonext-googleauth/next/node_modules/axios/lib/adapters/http.js:495:11)
+    at IncomingMessage.emit (node:events:525:35)
+    at endReadableNT (node:internal/streams/readable:1358:12)
+    at processTicksAndRejections (node:internal/process/task_queues:83:21) {
+
+...以下省略(エラー全文を最後に載せています)
+```
+そしてDjang側のターミナル上で
+```
+Bad Request: /api/social/login/google/
+[04/Nov/2022 20:17:48] "POST /api/social/login/google/ HTTP/1.1" 400 75
+```
+が出ていました。
+
+callbacks内の設定に不備があるようです。
+#### 3. [../nextauth].jsにconsole.logを足す
+```
+ async signIn(user, account, profile) {
+      if (account.provider === 'google') {
+        const { accessToken, idToken } = account
+        console.log("\naccessToken"+accessToken + "\nidToken:"+idToken )
+```
+おそらくdjangoへのpostでエラーが発生しているため、その直前で定義している変数を出力する設定を行い、変数が正しく定義されているか確認を行いました。
+```
+accessToken:undefined
+idToken:undefined
+```
+
+公式ドキュメントによると、accountはプロバイダのことを指しています。
+
+https://next-auth.js.org/configuration/events#events
+
+よって、
+```
+const { accessToken, idToken } = account
+```
+
+
+でgoogleからaccessTokenとidTokenの取得と変数の作成に失敗しているのではないか？というところまで推測できましたが、これ以上はわかりませんでした。
+
+
+
+このエラーを解決するために、何をやればいいか見当がつかない
+状況です。
+手順やプロセスなど、何かアドバイスがあればお伺いしたいです。
+長文になってしまいましたが、よろしくお願いいたします。
